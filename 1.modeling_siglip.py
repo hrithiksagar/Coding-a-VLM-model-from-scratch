@@ -251,4 +251,4 @@ class SiglipEncoder(nn.Module):
             hidden_states = encoder_layer(hidden_states)
         return hidden_states
             
- 
+# now a way to combine text input with visual input, image tokens should be kept with text tokens. tokenize the text and make it a list, make a place holder for image tokens, use transformers to replace it.abs 
