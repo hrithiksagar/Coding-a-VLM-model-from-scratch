@@ -85,7 +85,7 @@ class SiglipVisionTransformer(nn.Module):
         
         self.embeddings = SiglipVisionEmbeddings(config) # Calling Embeddings class, First needs to extract embedding using this class
         self.encoder = SiglipEncoder(config)       # Calling Encoder Class, then run those embedding in this layer i.e., encoder, Because it reminds encoder of transformer
-        self.post_layernorm = nn.LayerNorm(embed_dim, eps = config.layer_norm_eps) # then layer normalization, #TODO: Add why and Layer norm works (as Umar said he will explain later)
+        self.post_layernorm = nn.LayerNorm(embed_dim, eps = config.layer_norm_eps) # then layer normalization, reason is that, added a batch norm notes, check it. 
     
     # Forward method is very simple, 
     def forward(self, pixel_values: torch.Tensor): # pixel_values is input image or batch of images
