@@ -9,11 +9,11 @@ class SiglipVisionConfig:
         hidden_size = 768,      # size of embedding vector
         intermediate_size=3072, # linear layer size for feedforward network
         num_hidden_layers=12,   # no of layers of vision transformer
-        num_attention_heads=12, 
+        num_attention_heads=12, # number of attention heads in the multi head attention
         num_channels=3,         # how chennels of image RGB
-        image_size=224,         # Pali gemma comes in only few sizes 
+        image_size=224,         # Pali gemma comes in only few sizes, 224, 448, 896.... any image will firts gets resized to
         patch_size=16,          # each image will be divided into patches of patch_size
-        ayer_norm_eps = 1e-6, 
+        layer_norm_eps = 1e-6, 
         attention_dropout=0.0,  # not using here, its dropout 
         num_image_tokens: int = None, # how many output embedding does this transformer will output?  which is how many image embeddings we have for each image
         **kwargs
@@ -30,20 +30,22 @@ class SiglipVisionConfig:
         self.attention_dropout = attention_dropout
         self.layer_norm_eps = layer_norm_eps
         self.num_image_tokens = num_image_tokens
-             
+
+# --------4-----------
+# 4. this is the embedding layer. 
 class SiglipVisionEmbeddings(nn.Module):
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
-        self.image_size = config.image_size
-        self.patch_size = config.patch_size
+        self.image_size = config.image_size # how big is the image
+        self.patch_size = config.patch_size # how big is the batCH THAT WE WANT TO GET FROM THe IMAGE, here we are getting 16, so 16*16 puixels. 
         
         self.patch_embeddings = nn.Conv2d( # Conv2d is used to extract patches from the image
-            in_channels = config.num_channels, # RGB channels
+            in_channels = config.num_channels, # RGB channels, 3
             out_channels = config.hidden_size, # embedding size, hidden size
-            kernel_size = config.patch_size,   # For each output channel we have 1 kernal, so 3. patch size, how big is the patch we need mostly 16
-            stride = config.patch_size,         # patch size, image is of going to be 16*16 pixels. we take first group of 3*3 kernal and keep sliding over each channel of input image
+            kernel_size = config.patch_size,   # For each output channel we have 1 kernal, so 3. patch size, how big is the patch we need mostly 16. Kernal is something that is used to extract features from the image, it is a small matrix that is convolved over the image to extract features. More like convolutional Kernal, say 3*3, which will pass through the image and extract output eatures from it. For each output channel there is one channel, here in this case = 3 each for R , G and B. 
+            stride = config.patch_size,        # to avoid ovberlap of kernal, when kernal is moving, how much distc does this should move? is what said by stride like in CNN. patch size, image is of going to be 16*16 pixels. we take first group of 3*3 kernal and keep sliding over each channel of input image
             padding = "valid" # i.e., no padding is added to the image
         )
         self.num_patches = (self.image_size // self.patch_size) ** 2 # how many patches we have in the image. number of patches = (224/patch_size) ** 2 patch)_szie = 16/16
@@ -51,12 +53,12 @@ class SiglipVisionEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(self.num_positions, self.embed_dim) # position embedding for each patch and [CLS] token, vector of same size of patch, learned embeddings. each of them is added to info extracted from convolution
         self.register_buffer(
             "position_ids", # register buffer is used to store some tensor which is not a parameter of the model
-            torch.arange(self.num_positions).expand((1, -1)), # position ids for each patch and [CLS] token  between 0 and num_positions
+            torch.arange(self.num_positions).expand((1, -1)), # position ids for each patch and [CLS] token  between 0 and num_positions -1
             persistent=False, # not saved in the state dict
         )
         
     def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
-        _,_,height, width = pixel_values.shape # get height and width of the image, [batch_size, channels, height, width], pixel_values came from numpy and numpy loads batch of images with Height and width with tensor of 3 channels, image size is 224*224
+        _,_,height, width = pixel_values.shape # pixel values came from numpy, Numpy l;oads a batch of images with Batch ssize with its channels, height and weight. get height and width of the image, [batch_size, channels, height, width], pixel_values came from numpy and numpy loads batch of images with Height and width with tensor of 3 channels, image size is 224*224
         # Convolve the patch_size kernal over the image with no overlapping patches since the 
         # The output of the convolution will have shape [Batch_size, embed_dim, Num_patches_H, Num_patches_W]
         # where Num_patches_H = height // patch_size and Num_patches_W = width // patch_size
@@ -75,36 +77,46 @@ class SiglipVisionEmbeddings(nn.Module):
         
         return embeddings 
         
-        
-# Vision Transformer Class
-class SiglipVisionTransformer(nn.Module):
+# -------3--------        
+# 3 Vision Transformer Class
+class SiglipVisionTransformer(nn.Module): # this is the a torcvh layer where we pass the config of size of embedding vector and then run the model
     def __init__(self, config:SiglipVisionConfig):
         super().__init__()
         self.config = config
         embed_dim = config.hidden_size # hidden size of this embedding vector
         
         self.embeddings = SiglipVisionEmbeddings(config) # Calling Embeddings class, First needs to extract embedding using this class
-        self.encoder = SiglipEncoder(config)       # Calling Encoder Class, then run those embedding in this layer i.e., encoder, Because it reminds encoder of transformer
+        self.encoder = SiglipEncoder(config)       # Calling Encoder Class, then run those embedding in this layer i.e., encoder, Because it reminds encoder of transformer. this is a series of layers of transformer. Main part of the transformer encoder model, which is a series of layers of transformer. Each layer has multi head attention, layer normalization and feed forward network.
         self.post_layernorm = nn.LayerNorm(embed_dim, eps = config.layer_norm_eps) # then layer normalization, reason is that, added a batch norm notes, check it. 
     
-    # Forward method is very simple, 
+    # Forward method is very simple, we take this image, which is a a batch of images and convert them into batch of embeddings, basiclaly extrtacting patches of images. Take these imagesm, run a convolution, flatten them to get patches then flatten them and add positional embeddings to each patch, then run those patches through encoder, which is a series of layers of transformer.
     def forward(self, pixel_values: torch.Tensor): # pixel_values is input image or batch of images
         hidden_states = self.embeddings(pixel_values) # extracting patches from images and loading here and this is done by "SiglipVisionEmbeddings" Class
         last_hidden_state = self.encoder(inputs_embeds=hidden_states) # then take those embedding and run through encoder, which is a list of layers of transformers. includes multi layer attention, layer norm and feed forward network.
         last_hidden_state = self.post_layernorm(last_hidden_state) # then apply layer normalization
         return last_hidden_state 
-        
-# Vision Model Class        
+
+# -----2--------
+# 2 Vision Model Class        
 class SiglipVisionModel(nn.Module):
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
-        self.vision_model = SiglipVisionTransformer(config) # Calling Vision Transformer Class
+        self.vision_model = SiglipVisionTransformer(config) # Calling Vision Transformer Class, vision_model is made up of transformer  
         
-    def forward(self, pixel_values):
+    def forward(self, pixel_values): # takle pixel values of image via numpy --> converted to array. 
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_patches, Embed_Dim]
-        return self.vision_model(pixel_values=pixel_values)
+        return self.vision_model(pixel_values=pixel_values) # Vision_model will take this image and convert it to Batch size, Num_patches, Embed_Dim, which is a list of patches with embedding vector of size embed_dim. Embed_dim == each vector of fixed dimention. 
+    # Basically, vision_model will take list of images of BATCH SIZE, convert them into list of embeddings of size Embed_dim, which is a vector of fixed size, and then return it.
 
+#-----6--------
+""" this is the just like vanilla transformer, made up of 2 layers. 
+1st layer: takes up tokens or patches of images or each embeddings: and expands them inermediate size, chosen as 3 or 4 times the hidden zie
+2nd layer: then apply a non linearlrity
+3rd step: compress it to hidden size dimension again
+but why to do this?
+Because it allows the model to learn more complex patterns and relationships between the patches, by expanding the embeddings to a larger size, applying a non-linearity, and then compressing it back to the hidden size, the model can learn more complex relationships between the patches and the image as a whole.
+"""
 class SiglipMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -125,40 +137,49 @@ class SiglipMLP(nn.Module):
         return hidden_states
         
 
+# ----5---------
+# 5. Encoder Class  
+"""
+Made up of multiple latyers of transformer model, asrchitecture is like this:
+Input -> Layer Norm -> Multi Head Attention -> Residual Connection -> Layer Norm -> Feed Forward Network -> Residual Connection -> Output
+SiglipVisionEmbeddings gives image patches using a convolutional layer, gets vector embedding which is added to vector called posiitonal embeddings which is learned embeddings, then this stuff is fed to "encoder". 
 
-# Encoder Class  
+in short, SiglipVisionEmbeddings extracts patches from the image and converts them into a list of embeddings, which is then passed to the encoder. The encoder is made up of multiple layers of transformer model, each layer has multi head attention, layer normalization and feed forward network. Each layer has residual connection, which is a skip connection that adds the input of the layer to the output of the layer. This is done to avoid vanishing gradient problem and to make the model more robust.
+"""
 class SiglipEncoderLayer(nn.Module):
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
-        self.self_attn = SiglipAttention(config) # Calling Attention Class
+        self.self_attn = SiglipAttention(config) # Calling Attention Class # 
         self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps) # Layer normalization
-        self.mlp = SiglipMLP(config) # Calling MLP Class
-        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps) # Layer normalization
+        self.mlp = SiglipMLP(config) # <6> Calling MLP Class # this is multi layer perceptron layer 
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps) # Layer normalization layer
     
+    # main encoder logic forward pass. 
     def forward( self, hidden_states: torch.Tensor) -> torch.Tensor: # hidden states from previous layer
-        # residual: [Batch_size, Num_patches, Embed_dim]
+        # residual: [Batch_size, Num_patches, Embed_dim] connection, send the input we feed to the encoder. 
         residual = hidden_states # Skip connection
         
-        # [Batch_size, Num_patches, Embed_dim] -> [Batch_size, Num_patches, Embed_dim]
-        hidden_states = self.layer_norm1(hidden_states) # Layer normalization
+        # [Batch_size, Num_patches, Embed_dim] -> [Batch_size, Num_patches, Embed_dim] then we run the input via layer normalization, the shape doesnt get changed. 
+        hidden_states = self.layer_norm1(hidden_states) # Layer normalization; its like the gaussian wiht mean 0 and variance 1 
         
         # [Batch_size, Num_patches, Embed_dim] -> [Batch_size, Num_patches, Embed_dim]
-        hidden_states, _ = self.self_attn(hidden_states=hidden_states) # Self Attention
+        hidden_states, _ = self.self_attn(hidden_states=hidden_states) # Self Attention, this is delat later, doesnt now chnage the input embeddings size, just gives ocntextualized embeddings. Consider this as blackbox as of now. 
         
-        #[Batch_size, Num_patches, Embed_dim]
+        #[Batch_size, Num_patches, Embed_dim], this is a skip opr residual connections, basiclaly an ADDITION of hidden state and self attention./
         hidden_states = residual + hidden_states # Residual connection, Skip connection + output of self attention
         
         #residual: [Batch_size, Num_patches, Embed_dim]
         residual = hidden_states
         
-        hidden_states = self.layer_norm2(hidden_states) # Layer normalization
+        hidden_states = self.layer_norm2(hidden_states) # Layer normalization, another linear layer normalization that doesnt chnage the shape. 
         
         # [Batch_size, Num_patches, Embed_dim] -> [Batch_size, Num_patches, Embed_dim]
-        hidden_states = self.mlp(hidden_states) # Feed Forward Network, take each input embedding and transform it to another embedding, here there is not mixing between them, each of them is transformed independently, has more degrees of freedom to learn, allows to prepare the sequence of patches for next layers and added non linearity which allows to learn complex patterns.
+        hidden_states = self.mlp(hidden_states) # Feed Forward Network, take each input embedding and transform it to another embedding, here there is not mixing between them, each of them is transformed independently, has more degrees of freedom to learn, allows to prepare the sequence of patches for next layers and added non linearity which allows to learn complex patterns. 
+        # Not very easy to explain, series of linea rlayers that takes each input embeddings and transforms it independently each other. There i no mixing between the patches, each patch is transformed independently, so models have more degree of freedom to learn on multiple tasks. 
         
         # [Batch_size, Num_patches, Embed_dim]
-        hidden_states = residual + hidden_states # Residual connection, Skip connection + output of feed forward network
+        hidden_states = residual + hidden_states # Residual connection, "Skip connection + output of feed forward network"
         
         return hidden_states
         
