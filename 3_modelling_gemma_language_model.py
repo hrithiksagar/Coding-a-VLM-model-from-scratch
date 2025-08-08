@@ -1,4 +1,7 @@
 # Modelling the Text Language Model using GEMMA
+# So, this is the 3rd  logic in the series, 1st file is coding the vision aspect
+# 2nd part is coding the text aspect i.e., user prompt and image embeddings mixture which returns a final return_data which is a combination of image+text embeddings, used by the final main Language Model Decoder. 
+# 3rd file is this Large Langauge Model Decoder. 
 # Prompt = given by user and the image
 
 import torch

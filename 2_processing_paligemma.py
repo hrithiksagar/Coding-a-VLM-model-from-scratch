@@ -1,14 +1,14 @@
-# now a way to combine text input with visual input, image tokens should be kept with text tokens. tokenize the text and make it a list, make a place holder for image tokens, use transformers to replace it.abs 
-
+# now a way to combine text input with visual input, image tokens should be kept with text tokens. tokenize the text and make it a list, make a place holder for image tokens, use transformers to replace it.abs Currenly, this is the code to Merge Processed image tokens + Prompt tokenized embeddings, as of now keeping placeholders for image tokens, later we will replace it with actual image embeddings.
 from typing import Dict, List, Tuple, Union, Tuple, Iterable
 import numpy as np
 import torch
 from PIL import Image
-
-IMAGENET_STANDARD_MEAN = [0.5, 0.5, 0.5]
+                        
+# ------2-------
+IMAGENET_STANDARD_MEAN = [0.5, 0.5, 0.5] # R, G, B --> 3 channels 
 IMAGENET_STANDARD_STD = [0.5, 0.5, 0.5]
 
-
+# process image function, first resizes the image, then convert image into numpy array and rescales it between 0-1 and normalizes then move the channel dimension to the channel height width dimensions
 def process_images(
     images:List[Image.Image], # list of images
     size: Dict[str, int] = None, # size of the image
@@ -17,6 +17,7 @@ def process_images(
     image_mean: Optional[Union[float, List[float]]] = None, # mean of the image, if None, no normalization is done
     image_std: Optional[Union[float, List[float]]] = None, # standard deviation of the image, if None, no normalization is done
 ) -> List[np.ndarray]:
+    
     height, width = size[0], size[1]
     images = [
         resize(image = image, size = (height, width), resample = resample) for image in images
@@ -57,37 +58,35 @@ def normalize(
     image = (image - mean) / std # normalizing the image by subtracting the mean and dividing by the standard deviation
     return image
 
-def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_len, image_token):
-    """
-        Quoting from the blog (https://huggingface.co/blog/paligemma#detailed-inference-process) :
-        The input text is tokenized normally.
-        A ‹bos> token is added at the beginning, and an additional newline token (\n) is appended.
-        This newline token is an essential part of the input prompt the model was trained with, so adding it explicitl!
-        The tokenized text is also prefixed with a fixed number of ‹image > tokens.
-        NOTE: from the paper it looks like the '\n*
-        should be tokenized
-        separately, but in the HF implementation this is
-        ref to HF implementation: https://github.com/huggingface/transformers/blob/7f79a97399bb 52aad8460elda2f3657
-    """
-    return f"{image_token * image_seq_len} {bos_token} {prefix_prompt}\n"
-
+# -----1----------------------------------------------------
 class PaliGemmaProcessor:
+    # placeholder image embeddings tokens will be written here, which will be later replaced by the original image embdedding extracted by vision encoder and thats IMAGE_TOKEN:
+    IMAGE_TOKEN = "<image>" # PLACEHOLDER -- this is the token that will be used to represent the image in the text prompt, it will be replaced by the actual image embeddings later
+    
     def __init__(self, tokenizer, num_image_tokens: int, image_size: int):
         super().__init__()
         
         self.image_size = image_size
         self.image_seq_len = num_image_tokens
         
-        # tokenizer is described i this link https://github.com/google-research/big_vision/configs/proj/
+        # Tokennizer pali gemma is using isn the tokzenier of Gemma model.
+        # PaliGemma can also do image segmenmtation, such as objecty detection. 
+            # does by using special tokens, called as segmentatrion tokens and location tokens, out goal is to do inference paligemma not this segmentation or object detection 
+        """
+            PaliGemma uses the Gemma tokenizer with 256'000 tokens, but we further extend its vocabulary with 1024 entries that represent coordinates in normalized image-space (<loc0000>...<loc1023>), and another with 128 entries (<seg000>...<seg127>) that are codewords used by a lightweight referring-expression segmentation vector-quantized variational auto-encoder (VQ-VAE) with the architecture of Ning et al. (2023) and trained on OpenImages as in PaLI-3. While the big_vision codebase is flexible enough to extend tokenizers on-the-fly, we also provide a SentencePiece model file of the Gemma tokenizer with these additional tokens baked in, for the convenience of other codebases.
+        """
+        
+        # tokenizer is described i this link https://github.com/google-research/big_vision/tree/main/big_vision/configs/proj/paligemma 
+        # HF: https://huggingface.co/blog/paligemma  
         tokens_to_add = {"additional_special_tokens": [self.IMAGE_TOKEN]}
         tokenizer.add_special_tokens(tokens_to_add)
         
         EXTRA_TOKENS = [
-            f"<loc{i:04d}>" for i in range(1024)
+            f"<loc{i:04d}>" for i in range(1024) # location tokens for image detection tokens
         ] # These toekns are used for object detection [Bounding boxes]
         
         EXTRA_TOKENS += [
-            f"<seg{i:03d}>" for i in range (128)
+            f"<seg{i:03d}>" for i in range (128) # object segmenation
             ] # These tokens are used for object segmentation
         
         tokenizer.add_tokens(EXTRA_TOKENS)
@@ -103,6 +102,7 @@ class PaliGemmaProcessor:
         
     # method for calling Image and Text data together
     # input is list of texts and images 
+    # this call method allows the instance of the processor to be called liek a function. , takes inputs of single text and single image. 
     def __call__(
         self, 
         text: List[str],
@@ -112,7 +112,9 @@ class PaliGemmaProcessor:
     ) -> dict:
         assert len(text) == 1 and len(text) == 1, f"Received {len(images)} images for {len(text)} prompts(Texts)" # # assert is used to check if the condition is true, if it is true, the program will continue to run, if it is false, the program will raise an AssertionError
         # work with only 1 image and 1 prompt at a time. 
-        # to process these images, we use a special method 
+        # to process these images, we use a special method , latyer this code can be changed for final training and inference, where we can pass multiple images and prompts at a time.
+        
+        # we need to process these images which will take the image and resize them to the imaghe size accepted by pali gemma version 224*224, rescale the pixel values to 0-1, normalize the pixel values to have a mean of 0 and standard deviation of 1, and convert the images to a numpy array with shape [Batch_size, Channel, Height, Width] ~ [Batch_size, 3, 224, 224] 
         pixel_values = process_images(
             images, 
             size(self.image_size, self.image_size), # (224, 224) for paligemma the version we are using, https://huggingface.co/google/paligemma-3b-pt-224
@@ -122,15 +124,17 @@ class PaliGemmaProcessor:
             image_mean = IMAGENET_STANDARD_MEAN, # mean of the image
             image_std = IMAGENET_STANDARD_STD, # standard deviation of the image
         ) 
-        # convert it to a tensor to process for vision model
-        # convert the list of numpy arrays to a single numpy array with shape [Batch_size, 3, 224, 224] ~ [Batch_size, Channel, Height, Width]
+        
+        # convert it to a tensor to process for vision model, as this will return a list of tensor. 
+        # convert the list of numpy arrays to a single numpy array with shape [Batch_size, 3, 224, 224] ~ [Batch_size, Channel, Height, Width], adds another dimention, instead makes a big 1 tensor. 
         pixel_values = np.stack(pixel_values, axis = 0)
         # convert the numpy array to a pytorch tensor
         pixel_values = torch.tensor(pixel_values) 
         
         # prepend a 'self.image_seq_len' number of image tokens to the text/prompt
+        # this is the input to the model, this method is fggoing to create a tojkens of the text and placeholder of image tokens. 
         input_strings = [
-            add_image_tokens_to_prompt(
+            add_image_tokens_to_prompt( # this will pretty self explainatory. Way it is done is, see at the function block
                 prefix_prompt = prompt,
                 bos_token = self.tokenizer.bos_token,
                 image_sq_len = self.image_seq_len,
@@ -140,6 +144,8 @@ class PaliGemmaProcessor:
         ]
         
         # Returns the input_ids and attention_mask for the model as pytorch tensors
+        # this is the placeholder for the image tokens, which will be replaced by the actual image embeddings later.
+        # say, the input text is "HELLO WORLD" which in text format can be assumed asd [5,2,9] token position in the vocabulary, remember the class taugh by a CVIT prof in anoops sirs DIP? The whole natural text conversion into the vocabulary using numbers.....--> will get eoncverted into embedding vectors via embedding layer [[....], [....], [....]] say 1024 dimensions
         inputs = self.tokenizer(
             input_strings,
             padding = padding,
@@ -148,7 +154,7 @@ class PaliGemmaProcessor:
         )
         
         return_data = {"pixel_values ": pixel_values, **inputs} # **inputs is used to unpack the dictionary into the return_data dictionary. 
-        return return_data
+        return return_data # we need to pass thias returned image + text tokens to language model
     
     def process_images(
         images:List[Image.Image], # list of images
@@ -175,4 +181,23 @@ class PaliGemmaProcessor:
         # Move the channel dimension to the first dimension. The model expects images in the format [Channel, Height, Width]
         images = [image.transpose(2, 0, 1) for image in images]
         
-        return images
+        return images    
+    
+# -----3-------
+# add image token placeholders, 256 tokens for image embeddings, this is the token that will be used to represent the image in the text prompt, it will be replaced by the actual image embeddings later.
+# this is the function that will be used to add the image tokens to the prompt, it will be used in the PaliGemmaProcessor class
+# this function will take the prefix prompt, bos token, image sequence length and image token as input and return the prompt with image tokens added at the beginning.
+def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_len, image_token):
+    """
+        Quoting from the blog (https://huggingface.co/blog/paligemma#detailed-inference-process) :
+        The input text is tokenized normally.
+        A ‹bos> token is added at the beginning, and an additional newline token (\n) is appended.
+        This newline token is an essential part of the input prompt the model was trained with, so adding it explicitl!
+        The tokenized text is also prefixed with a fixed number of ‹image > tokens.
+        NOTE: from the paper it looks like the '\n*
+        should be tokenized
+        separately, but in the HF implementation this is
+        ref to HF implementation: https://github.com/huggingface/transformers/blob/7f79a97399bb 52aad8460elda2f3657
+    """
+    return f"{image_token * image_seq_len} {bos_token} {prefix_prompt}\n" # prefix promopt ==> user prompt. 
+
