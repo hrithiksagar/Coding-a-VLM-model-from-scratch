@@ -183,6 +183,8 @@ class SiglipEncoderLayer(nn.Module):
         
         return hidden_states
         
+#----7------
+# Attention Mechanism
 class SiglipAttention(nn.Module):
     """ Multi head attention from 'Attention is All You Need' paper """
     def __init__(self, config):
@@ -192,16 +194,18 @@ class SiglipAttention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = self.embed_dim // self.num_heads
         self.scale = self.head_dim ** -0.5 # scale factor, Equivalent to 1/Sqrt(self.head_dim). Why -0.5? Because it is used in the paper
-        self.dropout = config.attention_dropout
+        self.dropout = config.attention_dropout # never saw it used in Pali Gemma, but otehr models uses it , but can think its non existsnet for now
         
         # Query, Key, Value Projection weights 
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim) 
-        
+    
+    # output of layer normalizaton is fed to forward pass of attention mechanism as input    
     def forward(self, hidden_states: torch.Tensor,) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         
-        # hidden_states: [Batch_size, Num_patches, Embed_dim]
+        # hidden_states: [Batch_size, Num_patches, Embed_dim], it means we have a batch of images, each image is made up of num_patches, each oatch is represented by vector of size embed dimention 1024*1024, num patches can also be thought as sequence length. 
+        # First thing is take input and ran it through wq, wk and wv thier outputs are query key and vector. 
         batch_size, seq_len, _ = hidden_states.size() # get batch size, sequence length and embedding size of the hidden states 
         
         # query_states: [Batch_size, Num_patches, Embed_dim]
@@ -215,6 +219,7 @@ class SiglipAttention(nn.Module):
         
         # splitting embed_dim into smaller dimenstions, (num_heads * head_dim = embed_dim). Just grouping differently 
         # query_states: [Batch_size, Num_patches, Num_heads, Head_dim]
+        # splitting embed dimensions into smlaler parts called head ismentions, and transpose it, do it for QKV 
         query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2) # reshape the query states to [Batch_size, Num_patches, Num_heads, Head_dim] and then transpose to [Batch_size, Num_heads, Num_patches, Head_dim]
         key_states = key_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2) # reshape the key states to [Batch_size, Num_patches, Num_heads, Head_dim] and then transpose to [Batch_size, Num_heads, Num_patches, Head_dim]
         value_states = value_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2) # reshape the value states to [Batch_size, Num_patches, Num_heads, Head_dim] and then transpose to [Batch_size, Num_heads, Num_patches, Head_dim]
@@ -252,23 +257,25 @@ class SiglipAttention(nn.Module):
         attn_output = self.out_proj(attn_output)
         return attn_output, attn_weights
         
-        
-# Class for making a sequence of Enocoder layer for making input for the model, this output will be input for the model in next layer..... 
+#-----8----
+""" 8. Class for making a sequence of Enocoder layer for making input for the model, this output will be input for the model in next layer..... 
+Basiclaly this is the sequence of EncoderLayersm, i.e., in the fucntion "SiglipEncoderLayer", we wrote the main logic for encoder layer, tbus this layer should be repeated multiple times to make a sequence of encoder layers, which is done by this class. So the output of one will be input for the next layer, and so on.
+"""
 class SiglipEncoder(nn.Module):
     def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
         self.layers = nn.ModuleList(
-            [SiglipEncoderLayer(config) for _ in range(config.num_hidden_layers)]
+            [SiglipEncoderLayer(config) for _ in range(config.num_hidden_layers)] # the number of times it should repeate is based on the size of the hidden layers. 
         )
         
-    def forward(self, input_embeds: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_embeds: torch.Tensor) -> torch.Tensor: # sinmple, says we have input, pass it to the first layer, then its ouptut of this layer will become input to the next layer. 
         # input_embeds: [Batch_size, Num_patches, Embed_Dim]
         
         hidden_states = input_embeds
         
         for encoder_layer in self.layers:
-            # [Batch_Size, Num_Patches, Embed_Dim] -› [Batch_Size, Num_Patches, Embed_Dim]
+            # [Batch_Size, Num_Patches, Embed_Dim] -› [Batch_Size, Num_Patches, Embed_Dim] # no chnage in the sdhape of the input, just the values are changed
             hidden_states = encoder_layer(hidden_states)
         return hidden_states
             
